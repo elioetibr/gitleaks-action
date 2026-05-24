@@ -166,18 +166,58 @@ jobs:
       !contains(github.event.head_commit.message, 'skip ci') &&
       !contains(github.event.head_commit.message, '[skip ci]')
     steps:
-      - uses: actions/checkout@v6
-
-      - name: Checkout as bot
+      # Inlined the App-token + bot-config + checkout sequence that
+      # elioetibr/composite-actions/checkout-as-bot@v0 used to provide.
+      # The composite references `uses: ./bot-setup` internally, which
+      # GitHub Actions resolves relative to the CALLING repo (not the
+      # composite's own repo) — a well-known GHA footgun. Inlining
+      # sidesteps that and keeps the Release job self-contained.
+      - name: Generate App installation token
         id: bot
-        uses: elioetibr/composite-actions/checkout-as-bot@v0
+        uses: actions/create-github-app-token@v3
         with:
           client-id: ${{ vars.CLIENT_ID }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
           private-key: ${{ secrets.PRIVATE_KEY }}
-          # Stay on the main branch (not a detached HEAD on github.sha) so
-          # git-auto-commit-action can push the CHANGELOG commit. The
-          # composite's default ref resolves to github.sha, which detaches.
+
+      - name: Configure git as App bot
+        id: bot-config
+        env:
+          GITHUB_BOT_EMAIL: '41898282+github-actions[bot]@users.noreply.github.com'
+          GITHUB_BOT_USERNAME: 'github-actions[bot]'
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        shell: bash -l {0}
+        run: |
+          #!/usr/bin/env bash
+
+          set -euo pipefail
+
+          echo "GITHUB_BOT_EMAIL=${GITHUB_BOT_EMAIL}" >> "$GITHUB_ENV"
+          echo "GITHUB_BOT_USERNAME=${GITHUB_BOT_USERNAME}" >> "$GITHUB_ENV"
+
+          git config --global author.email    "${GITHUB_BOT_EMAIL}"
+          git config --global author.name     "${GITHUB_BOT_USERNAME}"
+          git config --global committer.email "${GITHUB_BOT_EMAIL}"
+          git config --global committer.name  "${GITHUB_BOT_USERNAME}"
+          git config --global init.defaultBranch    "${DEFAULT_BRANCH}"
+          git config --global pull.ff               only
+          git config --global pull.rebase           true
+          git config --global push.autosetupremote  true
+          git config --global push.followTags       true
+          git config --global user.email "${GITHUB_BOT_EMAIL}"
+          git config --global user.name  "${GITHUB_BOT_USERNAME}"
+
+      - name: Checkout with App token
+        uses: actions/checkout@v6
+        with:
+          # Stay on a branch ref (not detached HEAD on github.sha) so the
+          # subsequent Tagging step's `git push --follow-tags` has a real
+          # upstream to push to.
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ steps.bot.outputs.token }}
 
       - name: Resolve App bot user-id
         id: bot-user
