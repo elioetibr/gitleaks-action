@@ -63,7 +63,7 @@ jobs:
         run: |
           # PR title routed through env to defeat shell injection via title
           # contents (backticks, $-expansions, etc.). actionlint flags
-          # direct ${{ github.event.*.title }} usage in run blocks for
+          # direct github.event.*.title usage in run blocks for
           # exactly this reason.
           printf 'title=%s\n' "$PR_TITLE" >> "$GITHUB_OUTPUT"
 
