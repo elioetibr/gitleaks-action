@@ -18,12 +18,14 @@ Thanks for your interest in contributing to Gitleaks-Action!
   ```
 
   - Install dependencies:
-  ```
+
+  ```bash
   bun install
   ```
 
   - Run the build command:
-  ```
+
+  ```bash
   bun run build
   ```
 
@@ -31,7 +33,7 @@ Thanks for your interest in contributing to Gitleaks-Action!
 
 This project uses Bun's built-in test runner. After `bun install`:
 
-```
+```bash
 bun test                # run the suite once
 bun test --watch        # re-run on file changes
 bun test --coverage     # text coverage report

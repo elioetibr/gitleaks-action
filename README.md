@@ -1,6 +1,6 @@
 # Gitleaks Action
 
-```
+```text
 
   ┌─○───┐
   │ │╲  │
@@ -17,7 +17,7 @@
     </a>
 </p>
 
-Gitleaks is a SAST tool for detecting and preventing hardcoded secrets like passwords, API keys, and tokens in git repos. Gitleaks is an easy-to-use, all-in-one solution for detecting secrets, past or present, in your code. Enable **Gitleaks-Action** in your GitHub workflows to be alerted when secrets are leaked as soon as they happen. Check out our demos [here (.gif)](https://user-images.githubusercontent.com/15034943/178513034-de5a1906-b71d-454a-a792-47b7ac0e21e6.gif) and [here (.png)](https://user-images.githubusercontent.com/15034943/193462170-7314a63b-1c37-4c9e-ac93-33d6d3fc561a.png), or see what's new in v2 [here](v2.md). Don't forget to check out our [blog](https://blog.gitleaks.io), which details how to configure and set up Gitleaks-Action for organizations and enterprises.
+Gitleaks is a SAST tool for detecting and preventing hardcoded secrets like passwords, API keys, and tokens in git repos. Gitleaks is an easy-to-use, all-in-one solution for detecting secrets, past or present, in your code. Enable **Gitleaks-Action** in your GitHub workflows to be alerted when secrets are leaked as soon as they happen. Check out our [animated demo (.gif)](https://user-images.githubusercontent.com/15034943/178513034-de5a1906-b71d-454a-a792-47b7ac0e21e6.gif) and [screenshot (.png)](https://user-images.githubusercontent.com/15034943/193462170-7314a63b-1c37-4c9e-ac93-33d6d3fc561a.png), or see [what's new in v2](v2.md). Don't forget to check out our [blog](https://blog.gitleaks.io), which details how to configure and set up Gitleaks-Action for organizations and enterprises.
 
 ## Usage Example
 
@@ -45,9 +45,9 @@ jobs:
 
 ---
 
-### Environment Variables:
+### Environment Variables
 
-- `GITHUB_TOKEN`: This variable is automatically assigned by GitHub when any action gets kicked off. You can read more about the token [here](https://docs.github.com/en/actions/security-guides/automatic-token-authentication#about-the-github_token-secret).
+- `GITHUB_TOKEN`: This variable is automatically assigned by GitHub when any action gets kicked off. You can read more about [the GITHUB_TOKEN secret in GitHub's documentation](https://docs.github.com/en/actions/security-guides/automatic-token-authentication#about-the-github_token-secret).
   **gitleaks-action** uses this token to call [a GitHub API](https://octokit.github.io/rest.js/v18#pulls-create-review-comment) to comment on PRs.
 - `GITLEAKS_LICENSE` (required for organizations, not required for user accounts): A **gitleaks-action** license can be obtained at [gitleaks.io](https://gitleaks.io). **It should be added as an encrypted secret [to the repo](https://docs.github.com/en/actions/security-guides/encrypted-secrets#creating-encrypted-secrets-for-a-repository) or [to the organization](https://docs.github.com/en/actions/security-guides/encrypted-secrets#creating-encrypted-secrets-for-an-organization).**
 - `GITLEAKS_NOTIFY_USER_LIST` (optional): A list of GitHub accounts that should be alerted when **gitleaks-action** detects a leak. An email will be sent by GitHub to the user if their GitHub notification settings permit it. The format should be comma-separated with each username prefixed with `@`. Ex: `@octocat,@zricethezav,@gitleaks`. Spaces are okay too.
