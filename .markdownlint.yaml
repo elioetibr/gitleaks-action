@@ -1,0 +1,34 @@
+# markdownlint config for this repo.
+# https://github.com/DavidAnson/markdownlint/blob/main/doc/Rules.md
+default: true
+
+# MD013 (line-length): too noisy on tables, long URLs, and image embeds.
+MD013: false
+
+# MD022 (blanks around headings): keep on per user style preference.
+MD022: true
+
+# MD032 (blanks around lists): keep on per user style preference.
+MD032: true
+
+# MD033 (no-inline-html): action-docs uses HTML comment markers and
+# README.md / v2.md embed <img> tags for GitHub-rendered screenshots.
+MD033: false
+
+# MD034 (no-bare-urls): README.md prose embeds bare URLs for
+# shareable links. Not worth wrapping them all in <...>.
+MD034: false
+
+# MD036 (no-emphasis-as-heading): v2.md and README.md use _italic
+# dates_ as pseudo-headings under real headings — stylistic choice
+# for the announcement docs.
+MD036: false
+
+# MD041 (first-line-h1): v2.md starts with `## Announcements` because
+# it is meant to be embedded under another doc's H1, not standalone.
+# Action READMEs also start with action-docs markers, not an H1.
+MD041: false
+
+# MD001 (heading-increment): legacy announcement docs jump heading
+# levels for visual emphasis. Not worth restructuring.
+MD001: false

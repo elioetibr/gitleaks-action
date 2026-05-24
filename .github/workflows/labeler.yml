@@ -17,7 +17,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
-          token: ${{ steps.app-token.outputs.token || github.token }}
+          token: ${{ github.token }}
           fetch-depth: '0'
           fetch-tags: 'true'
 
@@ -58,29 +58,35 @@ jobs:
     steps:
       - name: Get PR title
         id: pr
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          echo "title=${{ github.event.pull_request.title }}" >> $GITHUB_OUTPUT
+          # PR title routed through env to defeat shell injection via title
+          # contents (backticks, $-expansions, etc.). actionlint flags
+          # direct ${{ github.event.*.title }} usage in run blocks for
+          # exactly this reason.
+          printf 'title=%s\n' "$PR_TITLE" >> "$GITHUB_OUTPUT"
 
       - name: Determine version bump
         id: bump
+        env:
+          TITLE: ${{ steps.pr.outputs.title }}
         run: |
-          TITLE="${{ steps.pr.outputs.title }}"
-
           # GitVersion patterns (matching GitVersion.yml)
           # Major: breaking change (! before :) or BREAKING CHANGE:
           if [[ "$TITLE" =~ ^(feat|fix|refactor|perf|build|ci|chore|docs|style|test)(\(.+\))?!: ]] || [[ "$TITLE" =~ ^BREAKING[\ -]CHANGE: ]]; then
-            echo "bump=major" >> $GITHUB_OUTPUT
+            echo "bump=major" >> "$GITHUB_OUTPUT"
           # Minor: feat
           elif [[ "$TITLE" =~ ^feat(\(.+\))?: ]]; then
-            echo "bump=minor" >> $GITHUB_OUTPUT
+            echo "bump=minor" >> "$GITHUB_OUTPUT"
           # Patch: fix
           elif [[ "$TITLE" =~ ^fix(\(.+\))?: ]]; then
-            echo "bump=patch" >> $GITHUB_OUTPUT
+            echo "bump=patch" >> "$GITHUB_OUTPUT"
           # No bump: docs, style, refactor, perf, test, build, ci, chore
           elif [[ "$TITLE" =~ ^(docs|style|refactor|perf|test|build|ci|chore|init)(\(.+\))?: ]]; then
-            echo "bump=none" >> $GITHUB_OUTPUT
+            echo "bump=none" >> "$GITHUB_OUTPUT"
           else
-            echo "bump=unknown" >> $GITHUB_OUTPUT
+            echo "bump=unknown" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Remove existing bump labels
