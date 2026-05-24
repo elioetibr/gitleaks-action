@@ -160,7 +160,6 @@ jobs:
       always() &&
       needs.all-green.result == 'success' &&
       vars.CLIENT_ID != '' &&
-      github.event.repository.visibility != 'public' &&
       !startsWith(github.event.head_commit.message, 'chore(release):') &&
       !contains(github.event.head_commit.message, 'ci skip') &&
       !contains(github.event.head_commit.message, '[ci skip]') &&
