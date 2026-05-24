@@ -1,0 +1,480 @@
+---
+name: CICD
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - '**'
+  push:
+    branches: ['**']
+
+  workflow_dispatch:
+
+concurrency:
+  group: cicd-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name != 'push' }}
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+
+jobs:
+  actionlint:
+    name: Action Lint
+    runs-on: ${{ vars.RUNS_ON_ARM64 || vars.RUNS_ON || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run actionlint
+        uses: reviewdog/action-actionlint@v1
+        with:
+          reporter: github-check
+          fail_level: error
+          actionlint_flags: -shellcheck=shellcheck
+
+  yamllint:
+    name: Yaml Lint
+    runs-on: ${{ vars.RUNS_ON_ARM64 || vars.RUNS_ON || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      - name: Install yamllint
+        run: pip install --upgrade yamllint
+      - name: Run yamllint
+        run: yamllint .
+
+  markdownlint:
+    name: Markdown Lint
+    runs-on: ${{ vars.RUNS_ON_ARM64 || vars.RUNS_ON || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run markdownlint-cli2
+        uses: DavidAnson/markdownlint-cli2-action@v23
+        with:
+          globs: |
+            **/*.md
+            !node_modules
+            !.venv
+            !CHANGELOG.md
+
+  action-docs-check:
+    name: Action Docs Check
+    runs-on: ${{ vars.RUNS_ON_ARM64 || vars.RUNS_ON || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: ".nvmrc"
+      - name: Check action READMEs are in sync with action.yml
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mapfile -t actions < <(find actions -mindepth 2 -maxdepth 2 -name action.yml)
+          if (( ${#actions[@]} == 0 )); then
+            echo "No actions present; action-docs check is a no-op."
+            exit 0
+          fi
+          fail=0
+          for f in "${actions[@]}"; do
+            dir="$(dirname "$f")"
+            echo "::group::Checking $dir"
+            if [[ ! -f "$dir/README.md" ]]; then
+              echo "::error file=$f::Missing README.md for $dir. Create it with action-docs markers, then run: npx action-docs --update-readme --source $f"
+              fail=1
+              echo "::endgroup::"
+              continue
+            fi
+            cp "$dir/README.md" "$dir/README.md.bak"
+            if ! npx --yes action-docs@^2 --no-banner --source "$f" --update-readme; then
+              echo "::error file=$f::action-docs failed to process $f"
+              mv "$dir/README.md.bak" "$dir/README.md"
+              fail=1
+              echo "::endgroup::"
+              continue
+            fi
+            if ! diff -q "$dir/README.md" "$dir/README.md.bak" >/dev/null; then
+              echo "::error file=$dir/README.md::README.md is out of sync with action.yml. Run: npx action-docs --update-readme --source $f"
+              diff -u "$dir/README.md.bak" "$dir/README.md" || true
+              fail=1
+            fi
+            mv "$dir/README.md.bak" "$dir/README.md"
+            echo "::endgroup::"
+          done
+          exit "$fail"
+
+  gitleaks:
+    name: Gitleaks
+    runs-on: ${{ vars.RUNS_ON_ARM64 || vars.RUNS_ON || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # gitleaks scans full git history for leaked secrets; the
+          # default shallow checkout would miss anything but HEAD.
+          fetch-depth: 0
+      - name: Run gitleaks
+        uses: ./
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          # Org-level license secret (visibility: all). Required by
+          # gitleaks-action@v2 for organization-owned repos.
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+  all-green:
+    name: All Green
+    runs-on: ${{ vars.RUNS_ON_ARM64 || vars.RUNS_ON || 'ubuntu-latest' }}
+    needs: [actionlint, yamllint, markdownlint, action-docs-check, gitleaks]
+    if: always()
+    steps:
+      - name: Verify all required checks passed
+        shell: bash -l {0}
+        run: |
+          #!/usr/bin/env bash
+
+          set -euo pipefail
+
+          results='${{ toJSON(needs) }}'
+          echo "$results"
+          if echo "$results" | grep -Eq '"result":\s*"(failure|cancelled)"'; then
+            echo "::error::One or more required checks failed or were cancelled."
+            exit 1
+          fi
+          echo "All required checks passed."
+
+  release:
+    name: Release
+    runs-on: ${{ vars.RUNS_ON_ARM64 || vars.RUNS_ON || 'ubuntu-latest' }}
+    needs: [actionlint, yamllint, markdownlint, action-docs-check, gitleaks, all-green]
+    # Skip when the previous commit was the auto-release CHANGELOG bump.
+    # Belt-and-braces: the commit also carries `[skip ci]` which GitHub
+    # Actions itself honors, so this is defense-in-depth.
+    if: ${{
+        always() &&
+        needs.all-green.result == 'success' &&
+        !startsWith(github.event.head_commit.message, 'chore(release):') ||
+        !contains(github.event.head_commit.message, 'ci skip') ||
+        !contains(github.event.head_commit.message, '[ci skip]') ||
+        !contains(github.event.head_commit.message, 'skip ci') ||
+        !contains(github.event.head_commit.message, '[skip ci]')
+      }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Checkout as bot
+        id: bot
+        uses: ./checkout-as-bot
+        with:
+          client-id: ${{ vars.CLIENT_ID }}
+          private-key: ${{ secrets.PRIVATE_KEY }}
+          # Stay on the main branch (not a detached HEAD on github.sha) so
+          # git-auto-commit-action can push the CHANGELOG commit. The
+          # composite's default ref resolves to github.sha, which detaches.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
+
+      - name: Resolve App bot user-id
+        id: bot-user
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          APP_SLUG: ${{ steps.bot.outputs.app-slug }}
+        shell: bash -l {0}
+        run: |
+          #!/usr/bin/env bash
+
+          set -euo pipefail
+          : "${APP_SLUG:?missing APP_SLUG}"
+          user_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
+          echo "user-id=${user_id}" >> "$GITHUB_OUTPUT"
+          echo "Bot identity: ${APP_SLUG}[bot] (id=${user_id})"
+
+      - name: GitVersion Setup
+        id: gitversion-setup
+        uses: gittools/actions/gitversion/setup@v4.5.0
+        with:
+          versionSpec: ${{ vars.GITVERSION_SPEC || '6.x' }}
+          preferLatestVersion: true
+
+      - name: Determine Version
+        id: gitversion
+        uses: gittools/actions/gitversion/execute@v4.5.0
+
+      - name: Tagging
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash -l {0}
+        run: |
+          #!/usr/bin/env bash
+
+          set -euo pipefail
+
+          echo "::group::Tag Information"
+          echo "::group::Tagger Function"
+          function tagger() {
+            VERSION=$1
+            echo "Releasing Version: ${VERSION}"
+            TAG_EXISTS=$(git ls-remote -q --tags | grep -q "refs/tags/${VERSION}$" && echo true || echo false)
+            if [[ "${TAG_EXISTS}" = true ]];
+            then
+              HAS_RELEASE=$(gh release list --json tagName -q '.[].tagName' | grep -E "^(${VERSION})$" && echo true || echo false)
+              if [[ "${HAS_RELEASE}" == true ]];
+              then
+                gh release delete --yes "${VERSION}"
+              fi
+              git push origin --delete "${VERSION}"
+              git tag -d "${VERSION}"
+            fi
+
+            echo "::group::Tagging Version ${VERSION}"
+            git tag -a "${VERSION}" -m "chore: Release Version ${VERSION}"
+            git push -f --tags --follow-tags
+            # NOTE: no `git push --set-upstream origin <ref>` here. On
+            # pull_request events github.ref_name is the virtual merge
+            # ref like 9/merge, which isn't a pushable branch — push
+            # fails with "src refspec 9/merge does not match any" and
+            # leaks an error into the CI log. Tags are already pushed
+            # above via --follow-tags; set-upstream was redundant on
+            # main pushes and broken on PR events.
+            echo "::endgroup::"
+          }
+          echo "::endgroup::"
+
+          echo "::group::Tagging Version v${{ steps.gitversion.outputs.semVer }}"
+          tagger "v${{ steps.gitversion.outputs.semVer }}"
+          echo "::endgroup::"
+
+          if [[ "${{ github.ref_name  }}" == "${{ github.event.repository.default_branch }}" && "${{ github.event_name }}" != "pull_request" ]];
+          then
+            echo "::group::Tagging Version v${{ steps.gitversion.outputs.majorMinorPatch }}"
+            tagger "v${{ steps.gitversion.outputs.majorMinorPatch }}"
+            echo "::endgroup::"
+
+            echo "::group::Tagging Version v${{ steps.gitversion.outputs.major }}.${{ steps.gitversion.outputs.minor }}"
+            tagger "v${{ steps.gitversion.outputs.major }}.${{ steps.gitversion.outputs.minor }}"
+            echo "::endgroup::"
+
+            echo "::group::Tagging Version v${{ steps.gitversion.outputs.major }}"
+            tagger "v${{ steps.gitversion.outputs.major }}"
+            echo "::endgroup::"
+          fi
+          echo "::endgroup::"
+
+      - name: Versions
+        id: versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash -l {0}
+        run: |
+          #!/usr/bin/env bash
+
+          echo "::group::Latest Released Tags Output"
+          # Latest GitHub release — the full-semver entry created by
+          # the `gh release create` step on previous runs. `gh release
+          # view` (no arg) resolves to the latest release by published
+          # date. Exits non-zero when there are no releases yet; the
+          # `|| true` fallback keeps the variable empty without failing
+          # the step. On first-ever release, both variables below stay
+          # empty strings — the Build Changelog step's `fromTag` input
+          # accepts empty (action auto-detects or uses empty_template).
+          RELEASED_SEMVER_TAG=$(
+            gh release view --json tagName --jq '.tagName' 2>/dev/null || true
+          )
+          RELEASED_RELEASE_DESC=$(
+            gh release view \
+              --json tagName,isPrerelease,publishedAt \
+              --jq '"\(.tagName) [\(if .isPrerelease then "prerelease" else "stable" end), \(.publishedAt)]"' \
+              2>/dev/null || echo "(no releases yet)"
+          )
+          echo "Latest GitHub release: ${RELEASED_RELEASE_DESC}"
+
+          echo ""
+          # Rolling umbrella tags are force-pushed on every release by
+          # the Tag step. They exist as git tags WITHOUT corresponding
+          # `gh release` entries, so we enumerate them via `git tag -l`
+          # + semver-pattern filters. Tags were fetched during Checkout
+          # (`fetch-tags: true`).
+          echo "Rolling umbrella tags (git-only, no GitHub release):"
+          ALL_TAGS=$(git tag -l 'v*' --sort=-v:refname 2>/dev/null || true)
+          RELEASED_SEMVER_GIT=$(printf '%s\n' "${ALL_TAGS}" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-.*)?$' | head -1)
+          RELEASED_MMP=$(printf '%s\n' "${ALL_TAGS}" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          RELEASED_MM=$(printf  '%s\n' "${ALL_TAGS}" | grep -E '^v[0-9]+\.[0-9]+$' | head -1)
+          RELEASED_M=$(printf   '%s\n' "${ALL_TAGS}" | grep -E '^v[0-9]+$' | head -1)
+          echo "  SemVer:          ${RELEASED_SEMVER_GIT:-none}"
+          echo "  MajorMinorPatch: ${RELEASED_MMP:-none}"
+          echo "  MajorMinor:      ${RELEASED_MM:-none}"
+          echo "  Major:           ${RELEASED_M:-none}"
+          echo "::endgroup::"
+
+          echo "::group::GitVersion Tags Output"
+          LATEST_SEMVER="v${{ steps.gitversion.outputs.semVer }}"
+          LATEST_MMP="v${{ steps.gitversion.outputs.majorMinorPatch }}"
+          LATEST_MM="v${{ steps.gitversion.outputs.major }}.${{ steps.gitversion.outputs.minor }}"
+          LATEST_M="v${{ steps.gitversion.outputs.major }}"
+
+          echo ""
+          echo "  SemVer:          ${LATEST_SEMVER:-none}"
+          echo "  MajorMinorPatch: ${LATEST_MMP:-none}"
+          echo "  MajorMinor:      ${LATEST_MM:-none}"
+          echo "  Major:           ${LATEST_M:-none}"
+          echo "::endgroup::"
+
+          # Step outputs consumed by subsequent steps (Build Changelog
+          # uses released-semver for fromTag, next-semver for toTag).
+          # On first-ever release, released-semver MUST be the empty
+          # string — `${VAR:-''}` inside double quotes would emit the
+          # literal two-character string `''` (bash treats the default
+          # value literally), which the API would then try to compare
+          # against and 404. `${VAR:-}` drops the default entirely so
+          # an empty source variable yields an empty output value, and
+          # the changelog action's empty-fromTag fallback path can run.
+          {
+            echo "released-semver=${RELEASED_SEMVER_TAG:-}"
+            echo "next-semver=v${{ steps.gitversion.outputs.semVer }}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Initial release notes
+        id: initial-notes
+        if: ${{ github.ref_name == github.event.repository.default_branch && steps.versions.outputs.released-semver == '' }}
+        env:
+          RELEASE_NOTES_FILE: RELEASE_NOTES.md
+          VERSION: v${{ steps.gitversion.outputs.semVer }}
+        shell: bash
+        run: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          # First-ever release: there is no prior tag to diff against, so
+          # mikepenz/release-changelog-builder-action errors out at the
+          # "retrieve previous tag" stage even with failOnError: false.
+          # Skip the builder entirely on this path and write a minimal
+          # notes file so the downstream Release step can publish.
+          cat > "${RELEASE_NOTES_FILE}" <<EOF
+          ## Initial release ${VERSION}
+
+          First public release of \`composite-actions\`.
+          EOF
+          echo "✓ wrote ${RELEASE_NOTES_FILE} ($(wc -c < "${RELEASE_NOTES_FILE}") bytes)"
+
+      - name: Build Changelog
+        id: changelog
+        if: ${{ github.ref_name == github.event.repository.default_branch && steps.versions.outputs.released-semver != '' }}
+        uses: mikepenz/release-changelog-builder-action@v6
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          configuration: changelog-configuration.json
+          # `fromTag` is the tag of the PREVIOUSLY-PUBLISHED GitHub
+          # release (pulled from `gh release view` in the Versions step
+          # above). This step only runs when that value is non-empty —
+          # the first-release path is handled by the sibling
+          # `Initial release notes` step, since this action cannot
+          # gracefully cope with "no prior tag at all" (it errors at the
+          # auto-detect stage before reaching empty_template).
+          fromTag: ${{ steps.versions.outputs.released-semver }}
+          toTag: ${{ steps.versions.outputs.next-semver }}
+          # Include pre-releases in the changelog range. Pre-release
+          # entries (e.g. v1.2.3-beta.1) count as "released" for the
+          # purpose of computing the diff from the previous release.
+          ignorePreReleases: "false"
+          # HYBRID mode: fetch merged PRs for their rich metadata
+          # (number, title, labels, author) AND include raw commits
+          # between tags that didn't land via PR. Matters for this
+          # repo because historical commits on main include direct
+          # pushes the default PR mode misses entirely — see run
+          # 24697992060, which emitted "No pull requests found"
+          # against a range of 8 real commits. With HYBRID, those
+          # commits appear as entries via their commit title (the
+          # same `label_extractor` regexes apply: feat:, fix:, chore:,
+          # test:, docs:, deps:), while future PR merges still get
+          # their PR-link template applied. Per upstream docs:
+          # "Hybrid mode treats commits like pull requests" —
+          # acceptable for this repo because we control the template
+          # and category mapping via changelog-configuration.json.
+          mode: "HYBRID"
+          # Workflow's native GITHUB_TOKEN — sufficient because the
+          # top-level `permissions:` block grants `pull-requests: read`,
+          # which is exactly what the Pulls-API listing endpoint needs.
+          token: ${{ github.token }}
+          # Write the rendered changelog to a file at the repo root
+          # (relative to the checkout dir, per the action's docs).
+          # The Release step consumes it via `gh release create -F <file>`
+          # rather than piping through a multi-line env var — avoids
+          # both shell-escaping gotchas with the 4 KB+ markdown body
+          # AND GitHub Actions' 1 MB limit on `outputs.*` values when
+          # the changelog grows large. File is .gitignore'd.
+          outputFile: RELEASE_NOTES.md
+          # Keep failing on resolution errors (malformed config,
+          # unreachable tags, etc.) — the first-release empty-range
+          # case is handled by the config's empty_template, not by
+          # swallowing errors here.
+          failOnError: true
+
+      - name: Release
+        id: release
+        if: ${{ github.ref_name == github.event.repository.default_branch }}
+        shell: bash -l {0}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Path to the changelog file written by the previous step's
+          # `outputFile` input. Keeping it as an env var so shell
+          # quoting is explicit and the value appears in the step's
+          # rendered log for debugging.
+          RELEASE_NOTES_FILE: RELEASE_NOTES.md
+        run: |
+          #!/usr/bin/env bash
+
+          set -euo pipefail
+
+          if [[ "${{ github.ref_name }}" != "${{ github.event.repository.default_branch }}" ]]; then
+            echo "Skipping release step on non-default branch."
+            exit 0
+          fi
+
+          echo "::group::Guard: changelog file exists + is non-empty"
+          # `outputFile` from mikepenz action writes at least the
+          # `empty_template` content ("No changes in this release")
+          # so the file is always present + non-empty on a successful
+          # Build Changelog run. Bailing here early surfaces a
+          # workflow-level bug before attempting a broken release.
+          if [[ ! -s "${RELEASE_NOTES_FILE}" ]]; then
+            echo "::error::${RELEASE_NOTES_FILE} is missing or empty. Did Build Changelog run?"
+            exit 1
+          fi
+          echo "✓ ${RELEASE_NOTES_FILE} ($(wc -c < "${RELEASE_NOTES_FILE}") bytes)"
+          echo "::endgroup::"
+
+          echo "::group::Clean up stale draft releases"
+          # Use gh's JSON output + jq filter instead of the previous
+          # `gh release list | grep Draft | awk` pipeline. Under
+          # `set -euo pipefail`, a `grep` that finds NO matches
+          # exits 1 — which is the HAPPY path here (no drafts to
+          # clean up) but fails the pipeline, which fails the step.
+          # Pure JSON avoids the exit-code trap: `gh release list`
+          # returns `[]` when empty, `jq` filters without signaling
+          # "no matches" via exit code, and `mapfile` handles the
+          # empty list cleanly.
+          mapfile -t DRAFTS < <(
+            gh release list --json tagName,isDraft --jq '.[] | select(.isDraft) | .tagName'
+          )
+          if [[ ${#DRAFTS[@]} -eq 0 ]]; then
+            echo "No draft releases to clean up."
+          else
+            for draft in "${DRAFTS[@]}"; do
+              echo "Removing draft release: ${draft}"
+              gh release delete --yes "${draft}"
+            done
+          fi
+          echo "::endgroup::"
+
+          echo "::group::Create release v${{ steps.gitversion.outputs.semVer }}"
+          # `-F <file>` is the short form of `--notes-file`. Reading
+          # the body from disk avoids shell-escaping multi-line
+          # markdown on the command line AND keeps `gh release create`
+          # strict about exit codes (no partial-failure hiding behind
+          # a successful shell pipeline).
+          gh release create "v${{ steps.gitversion.outputs.semVer }}" \
+            -F "${RELEASE_NOTES_FILE}" \
+            --verify-tag \
+            --latest
+          echo "::endgroup::"
