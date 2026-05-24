@@ -1,0 +1,6 @@
+[test]
+# Bun test runner configuration
+# https://bun.sh/docs/cli/test
+coverage = false
+coverageReporter = ["text"]
+preload = ["./tests/setup.js"]

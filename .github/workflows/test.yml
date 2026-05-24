@@ -1,0 +1,48 @@
+# Copyright © 2022 Gitleaks LLC - All Rights Reserved.
+# You may use this code under the terms of the GITLEAKS-ACTION END-USER LICENSE AGREEMENT.
+# You should have received a copy of the GITLEAKS-ACTION END-USER LICENSE AGREEMENT with this file.
+# If not, please visit https://gitleaks.io/COMMERCIAL-LICENSE.txt.
+#
+# CI test workflow: runs the bun-based unit suite against Node 24 and verifies
+# that dist/ is up to date with src/.
+
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - develop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: bun test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Run tests
+        run: bun test
+      - name: Build dist
+        run: bun run build
+      - name: Verify dist is up to date
+        run: |
+          if ! git diff --quiet -- dist; then
+            echo "::error::dist/ is out of date — run 'bun run build' and commit the result."
+            git --no-pager diff -- dist | head -100
+            exit 1
+          fi

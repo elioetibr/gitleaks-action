@@ -1,0 +1,29 @@
+{
+  "runs": [
+    {
+      "results": [
+        {
+          "ruleId": "aws-access-token",
+          "partialFingerprints": {
+            "commitSha": "abc1234567890abcdef1234567890abcdef1234",
+            "author": "Test Author",
+            "date": "2025-01-15T10:00:00Z",
+            "email": "test@example.com"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/secrets.js"
+                },
+                "region": {
+                  "startLine": 42
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
