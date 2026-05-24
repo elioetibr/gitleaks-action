@@ -1,0 +1,122 @@
+name: Labeler
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label-files:
+    name: Label by files
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
+          token: ${{ steps.app-token.outputs.token || github.token }}
+          fetch-depth: '0'
+          fetch-tags: 'true'
+
+      - name: Label PR based on file paths
+        uses: actions/labeler@v6
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          sync-labels: true
+
+  label-conventional-commits:
+    name: Label by conventional commits
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label PR based on conventional commit title
+        uses: bcoe/conventional-release-labels@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          type_labels: |
+            {
+              "feat": "type:feature",
+              "fix": "type:bugfix",
+              "docs": "type:documentation",
+              "style": "type:style",
+              "refactor": "type:refactor",
+              "perf": "type:performance",
+              "test": "type:test",
+              "build": "type:build",
+              "ci": "type:ci",
+              "chore": "type:chore",
+              "revert": "type:revert",
+              "init": "type:init"
+            }
+          ignored_types: '[]'
+
+  label-semver-bump:
+    name: Label version bump (GitVersion)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get PR title
+        id: pr
+        run: |
+          echo "title=${{ github.event.pull_request.title }}" >> $GITHUB_OUTPUT
+
+      - name: Determine version bump
+        id: bump
+        run: |
+          TITLE="${{ steps.pr.outputs.title }}"
+
+          # GitVersion patterns (matching GitVersion.yml)
+          # Major: breaking change (! before :) or BREAKING CHANGE:
+          if [[ "$TITLE" =~ ^(feat|fix|refactor|perf|build|ci|chore|docs|style|test)(\(.+\))?!: ]] || [[ "$TITLE" =~ ^BREAKING[\ -]CHANGE: ]]; then
+            echo "bump=major" >> $GITHUB_OUTPUT
+          # Minor: feat
+          elif [[ "$TITLE" =~ ^feat(\(.+\))?: ]]; then
+            echo "bump=minor" >> $GITHUB_OUTPUT
+          # Patch: fix
+          elif [[ "$TITLE" =~ ^fix(\(.+\))?: ]]; then
+            echo "bump=patch" >> $GITHUB_OUTPUT
+          # No bump: docs, style, refactor, perf, test, build, ci, chore
+          elif [[ "$TITLE" =~ ^(docs|style|refactor|perf|test|build|ci|chore|init)(\(.+\))?: ]]; then
+            echo "bump=none" >> $GITHUB_OUTPUT
+          else
+            echo "bump=unknown" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Remove existing bump labels
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+
+            const bumpLabels = ['bump:major', 'bump:minor', 'bump:patch', 'bump:none'];
+
+            for (const label of bumpLabels) {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number,
+                  name: label
+                });
+              } catch (e) {
+                // Label doesn't exist, ignore
+              }
+            }
+
+      - name: Add version bump label
+        if: steps.bump.outputs.bump != 'unknown'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const bump = '${{ steps.bump.outputs.bump }}';
+
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number,
+              labels: [`bump:${bump}`]
+            });

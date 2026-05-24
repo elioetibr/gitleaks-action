@@ -148,24 +148,29 @@ jobs:
     name: Release
     runs-on: ${{ vars.RUNS_ON_ARM64 || vars.RUNS_ON || 'ubuntu-latest' }}
     needs: [actionlint, yamllint, markdownlint, action-docs-check, gitleaks, all-green]
-    # Skip when the previous commit was the auto-release CHANGELOG bump.
-    # Belt-and-braces: the commit also carries `[skip ci]` which GitHub
-    # Actions itself honors, so this is defense-in-depth.
-    if: ${{
-        always() &&
-        needs.all-green.result == 'success' &&
-        !startsWith(github.event.head_commit.message, 'chore(release):') ||
-        !contains(github.event.head_commit.message, 'ci skip') ||
-        !contains(github.event.head_commit.message, '[ci skip]') ||
-        !contains(github.event.head_commit.message, 'skip ci') ||
-        !contains(github.event.head_commit.message, '[skip ci]')
-      }}
+    # Run when all checks passed AND the bot App is configured AND this
+    # isn't a release-loop or [skip ci] commit. The previous version of
+    # this `if:` used `||` between the skip-checks, which (due to GitHub
+    # Actions operator precedence: && binds tighter than ||) effectively
+    # caused Release to run on every commit. Replaced with && so the
+    # skip-checks compose correctly: Release runs only when NONE of the
+    # skip markers are present. The vars.CLIENT_ID guard prevents the job
+    # from running on forks/repos where the bot App isn't set up.
+    if: |
+      always() &&
+      needs.all-green.result == 'success' &&
+      vars.CLIENT_ID != '' &&
+      !startsWith(github.event.head_commit.message, 'chore(release):') &&
+      !contains(github.event.head_commit.message, 'ci skip') &&
+      !contains(github.event.head_commit.message, '[ci skip]') &&
+      !contains(github.event.head_commit.message, 'skip ci') &&
+      !contains(github.event.head_commit.message, '[skip ci]')
     steps:
       - uses: actions/checkout@v6
 
       - name: Checkout as bot
         id: bot
-        uses: elioetibr/composite-actions//checkout-as-bot@v0
+        uses: elioetibr/composite-actions/checkout-as-bot@v0
         with:
           client-id: ${{ vars.CLIENT_ID }}
           private-key: ${{ secrets.PRIVATE_KEY }}
