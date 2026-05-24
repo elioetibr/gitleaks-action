@@ -9,23 +9,27 @@ const core = require("@actions/core");
 const summary = require("./summary.js");
 const keygen = require("./keygen.js");
 const gitleaks = require("./gitleaks.js");
+const {
+  isSupportedEvent,
+  parseBoolFlag,
+  resolveScheduleEvent,
+  resolveGithubUsername,
+} = require("./config.js");
 
-let gitleaksEnableSummary = true;
-if (
-  process.env.GITLEAKS_ENABLE_SUMMARY == "false" ||
-  process.env.GITLEAKS_ENABLE_SUMMARY == 0
-) {
+const gitleaksEnableSummary = parseBoolFlag(
+  process.env.GITLEAKS_ENABLE_SUMMARY,
+  true
+);
+if (!gitleaksEnableSummary) {
   core.debug("Disabling GitHub Actions Summary.");
-  gitleaksEnableSummary = false;
 }
 
-let gitleaksEnableUploadArtifact = true;
-if (
-  process.env.GITLEAKS_ENABLE_UPLOAD_ARTIFACT == "false" ||
-  process.env.GITLEAKS_ENABLE_UPLOAD_ARTIFACT == 0
-) {
+const gitleaksEnableUploadArtifact = parseBoolFlag(
+  process.env.GITLEAKS_ENABLE_UPLOAD_ARTIFACT,
+  true
+);
+if (!gitleaksEnableUploadArtifact) {
   core.debug("Disabling uploading of results.sarif artifact.");
-  gitleaksEnableUploadArtifact = false;
 }
 
 // Event JSON example: https://docs.github.com/en/developers/webhooks-and-events/webhooks/webhook-events-and-payloads#webhook-payload-example-32
@@ -33,44 +37,25 @@ let eventJSON = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
 
 // Examples of event types: "workflow_dispatch", "push", "pull_request", etc
 const eventType = process.env.GITHUB_EVENT_NAME;
-const supportedEvents = [
-  "push",
-  "pull_request",
-  "workflow_dispatch",
-  "schedule",
-];
 
-if (!supportedEvents.includes(eventType)) {
+if (!isSupportedEvent(eventType)) {
   core.error(`ERROR: The [${eventType}] event is not yet supported`);
   process.exit(1);
 }
 
-// Determine if the github user is an individual or an organization
-let githubUsername = "";
-
-// eventJSON.repository is undefined for scheduled events
-if (eventType == "schedule") {
-  githubUsername = process.env.GITHUB_REPOSITORY_OWNER;
-  eventJSON.repository = {
-    owner: {
-      login: process.env.GITHUB_REPOSITORY_OWNER,
-    },
-    full_name: process.env.GITHUB_REPOSITORY,
-  };
-  let repoName = process.env.GITHUB_REPOSITORY;
-  repoName = repoName.replace(`${process.env.GITHUB_REPOSITORY_OWNER}/`, "");
-  // update repo name
-  process.env.GITHUB_REPOSITORY = repoName;
-} else {
-  githubUsername = eventJSON.repository.owner.login;
+if (eventType === "schedule") {
+  const resolved = resolveScheduleEvent(eventJSON, process.env);
+  eventJSON = resolved.eventJSON;
+  process.env.GITHUB_REPOSITORY = resolved.repoName;
 }
+const githubUsername = resolveGithubUsername(eventType, eventJSON, process.env);
 
 const octokit = new Octokit({
   auth: process.env.GITHUB_TOKEN,
   baseUrl: process.env.GITHUB_API_URL,
 });
 
-var shouldValidate = true;
+let shouldValidate = true;
 
 // Docs: https://docs.github.com/en/rest/users/users#get-a-user
 octokit
@@ -105,7 +90,6 @@ octokit
     );
   })
   .finally(() => {
-    // check if a gitleaks license is available, if not log error message
     if (shouldValidate && !process.env.GITLEAKS_LICENSE) {
       core.error(
         "🛑 missing gitleaks license. Go grab one at gitleaks.io and store it as a GitHub Secret named GITLEAKS_LICENSE. For more info about the recent breaking update, see [here](https://github.com/gitleaks/gitleaks-action#-announcement)."
@@ -121,7 +105,7 @@ octokit
 async function start() {
   // validate key first
 
-  // keygen payment method is getting declined... disable this check for now. 
+  // keygen payment method is getting declined... disable this check for now.
   // if (shouldValidate) {
   //   core.debug(
   //     `eventJSON.repository.full_name: ${eventJSON.repository.full_name}`
@@ -129,29 +113,21 @@ async function start() {
   //   await keygen.ValidateKey(eventJSON);
   // }
 
-  // default exit code, this value will be overwritten if gitleaks
-  // detects leaks or errors
   let exitCode = 0;
-
-  // check gitleaks version
 
   let gitleaksVersion = process.env.GITLEAKS_VERSION || "8.24.3";
   if (gitleaksVersion === "latest") {
     gitleaksVersion = await gitleaks.Latest(octokit);
   }
   core.info("gitleaks version: " + gitleaksVersion);
-  let gitleaksPath = await gitleaks.Install(gitleaksVersion);
+  const gitleaksPath = await gitleaks.Install(gitleaksVersion);
 
-  // default scanInfo
   let scanInfo = {
     gitleaksPath: gitleaksPath,
   };
 
-  // determine how to run gitleaks based on event type
   core.info("event type: " + eventType);
   if (eventType === "push") {
-    // check if eventsJSON.commits is empty, if it is send a info message
-    // saying we don't have to run gitleaks
     if (eventJSON.commits.length === 0) {
       core.info("No commits to scan");
       process.exit(0);
@@ -162,10 +138,9 @@ async function start() {
       headRef: eventJSON.commits[eventJSON.commits.length - 1].id,
     };
 
-    // Override scanInfo.baseRef if `BASE_REF` is set.
     if (process.env.BASE_REF) {
       scanInfo.baseRef = process.env.BASE_REF;
-      core.info(`Overriding baseRef for scan with ${process.env.BASE_REF}.`)
+      core.info(`Overriding baseRef for scan with ${process.env.BASE_REF}.`);
     }
 
     exitCode = await gitleaks.Scan(
@@ -188,8 +163,7 @@ async function start() {
     );
   }
 
-  // after gitleaks scan, update the job summary
-  if (gitleaksEnableSummary == true) {
+  if (gitleaksEnableSummary) {
     await summary.Write(exitCode, eventJSON);
   }
 

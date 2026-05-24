@@ -69,6 +69,7 @@ async function Install(version) {
   }
 
   core.addPath(pathToInstall);
+  return pathToInstall;
 }
 
 function downloadURL(platform, arch, version) {
@@ -279,4 +280,5 @@ module.exports.Scan = Scan;
 module.exports.Latest = Latest;
 module.exports.Install = Install;
 module.exports.ScanPullRequest = ScanPullRequest;
+module.exports.downloadURL = downloadURL;
 module.exports.EXIT_CODE_LEAKS_DETECTED = EXIT_CODE_LEAKS_DETECTED;
