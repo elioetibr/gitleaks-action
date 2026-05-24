@@ -1,0 +1,37 @@
+---
+# yamllint config tuned for this repo.
+# https://yamllint.readthedocs.io/en/stable/rules.html
+extends: default
+
+# Don't lint vendored deps, build output, or virtualenvs.
+ignore: |
+  node_modules/
+  .venv/
+  dist/
+  coverage/
+  bun.lock
+  bun.lockb
+
+rules:
+  # GitHub Actions workflows routinely carry long expression / URL lines that
+  # can't be wrapped without breaking ${{ }} substitution. 200 cols is a
+  # commonly used ceiling for workflow YAML.
+  line-length:
+    max: 200
+    level: warning
+
+  # In YAML 1.1, "on" is a boolean alias for "true". yamllint's default
+  # truthy rule flags GitHub Actions' `on:` keyword because of that legacy
+  # spec. Allow the explicit set we actually use.
+  truthy:
+    allowed-values: ['true', 'false', 'on']
+    check-keys: false
+
+  # Many repo YAML files (action.yml, configs) intentionally omit `---`.
+  # Don't fail CI on that stylistic choice.
+  document-start: disable
+
+  # Long comment URLs and section dividers shouldn't require trailing-space
+  # gymnastics.
+  comments:
+    min-spaces-from-content: 1
