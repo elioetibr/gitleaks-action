@@ -8,12 +8,14 @@ Thanks for your interest in contributing to Gitleaks-Action!
 - This project uses [Bun](https://bun.sh) as its package manager and test runner, and targets **Node.js 24** at runtime (see `.nvmrc` and `action.yml`).
 - "Build" the dist using [ncc](https://github.com/vercel/ncc):
   - Use [nvm](https://github.com/nvm-sh/nvm) to select the right version of node:
-  ```
+
+  ```bash
   nvm use
   ```
 
   - Install [Bun](https://bun.sh/docs/installation) (one time):
-  ```
+
+  ```bash
   curl -fsSL https://bun.sh/install | bash
   ```
 
