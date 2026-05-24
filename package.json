@@ -1,4 +1,16 @@
 {
+  "name": "gitleaks-github-action",
+  "license": "SEE LICENSE IN COMMERCIAL-LICENSE.txt",
+  "engines": {
+    "node": ">=24.0.0",
+    "bun": ">=1.3.0"
+  },
+  "scripts": {
+    "build": "ncc build src/index.js -o dist",
+    "test": "bun test",
+    "test:watch": "bun test --watch",
+    "test:coverage": "bun test --coverage"
+  },
   "dependencies": {
     "@actions/artifact": "^2.3.2",
     "@actions/cache": "^4.0.0",
@@ -8,8 +20,7 @@
     "@octokit/rest": "^18.12.0"
   },
   "devDependencies": {
-    "@vercel/ncc": "^0.34.0"
-  },
-  "license": "SEE LICENSE IN COMMERCIAL-LICENSE.txt",
-  "name": "gitleaks-github-action"
+    "@types/bun": "^1.3.0",
+    "@vercel/ncc": "^0.38.3"
+  }
 }
